@@ -16,10 +16,9 @@ You should have received a copy of the GNU General Public License
 along with pstrace_launcher.  If not, see <http://www.gnu.org/licenses/>.
 """
 import os
-from datetime import datetime
 from subprocess import check_call
 from logger import logger
-from flatland import Boolean, Form
+from flatland import Integer, Boolean, Form
 from pygtkhelpers.ui.extra_widgets import Filepath
 from pygtkhelpers.ui.form_view_dialog import FormViewDialog
 from plugin_helpers import AppDataController, StepOptionsController
@@ -48,8 +47,9 @@ class PSTraceOptions():
     """
     This class stores the options for a single step in the protocol.
     """
-    def __init__(self, run_pstrace=None, script=None):
+    def __init__(self, run_pstrace=None, delay_ms=None, script=None):
         self.run_pstrace = run_pstrace
+        self.delay_ms = delay_ms
         self.script = script
 
 
@@ -68,7 +68,9 @@ class PSTraceLauncher(Plugin, AppDataController, StepOptionsController):
                                                             optional=True))
 
     StepFields = Form.of(Boolean.named('run_pstrace').using(default=False,
-                                                            optional=True))
+                                                            optional=True),
+                         Integer.named('delay_ms').using(default=0,
+                                                         optional=True))
 
     def __init__(self):
         self.name = self.plugins_name
@@ -123,8 +125,8 @@ class PSTraceLauncher(Plugin, AppDataController, StepOptionsController):
     def on_step_run(self):
         # `get_step_options` is provided by the `StepOptionsController` mixin.
         options = self.get_step_options()
-        app_values = self.get_app_values()
         if options.run_pstrace and options.script:
+            app_values = self.get_app_values()
             exe_path = path(app_values['pstrace_exe'])
             script = path(options.script)
             if not exe_path.isfile():
@@ -137,19 +139,28 @@ class PSTraceLauncher(Plugin, AppDataController, StepOptionsController):
                 logger.error('[PSTraceLauncher] This plugin is only supported '
                              'on Windows')
             else:
-                command = ['start', '/d', exe_path.parent.abspath(),
-                           exe_path.name, script.abspath()]
                 pstrace_processes = [p for p in psutil.process_iter() if
                                      safe_psutil_attr(p, 'exe') ==
                                      exe_path.abspath()]
                 if not pstrace_processes:
-                    logger.info('[PSTraceLauncher] execute: %s', command)
-                    check_call(command, shell=True)
+                    if options.delay_ms > 0:
+                        logger.info('[PSTraceLauncher] delay: %s ms',
+                                    options.delay_ms)
+                        gtk.timeout_add(options.delay_ms, self._execute,
+                                        exe_path, script)
+                    else:
+                        self._execute(exe_path, script)
                 else:
                     logger.info('[PSTraceLauncher] skipping, since PSTrace is '
                                 'already running as process %s',
                                 [p.pid for p in pstrace_processes])
         self.complete_step()
+
+    def _execute(self, exe_path, script):
+        command = ['start', '/d', exe_path.parent.abspath(),
+                    exe_path.name, script.abspath()]
+        logger.info('[PSTraceLauncher] execute: %s', command)
+        check_call(command, shell=True)
 
     def complete_step(self, return_value=None):
         app = get_app()
